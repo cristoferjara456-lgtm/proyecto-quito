@@ -4,10 +4,10 @@ from streamlit_folium import st_folium
 import osmnx as ox
 import networkx as nx
 
-st.set_page_config(page_title="Quito Ruta Completa", layout="wide")
+st.set_page_config(page_title="Quito Maps Pro", layout="wide")
 
-# 1. BASE DE DATOS COMPLETA (Museos, Plazas y Calles)
-LUGARES_COMPLETOS = {
+# 1. BASE DE DATOS COMPLETA (Verificada)
+LUGARES = {
     "Museo de la Ciudad": [-0.2238, -78.5138],
     "Alberto Mena Caamaño (Museo de Cera)": [-0.2205, -78.5118],
     "Casa del Alabado Pre‑Columbian Art": [-0.2215, -78.5152],
@@ -38,49 +38,61 @@ LUGARES_COMPLETOS = {
 
 @st.cache_resource
 def obtener_grafo():
-    # Descargamos el mapa del Centro Histórico
-    return ox.graph_from_address("Plaza de la Independencia, Quito", dist=2000, network_type='all')
+    # Descarga la red vial para cálculos de ruta
+    return ox.graph_from_address("Plaza de la Independencia, Quito", dist=2500, network_type='all')
 
 G = obtener_grafo()
 
-st.title("🏛️ Ruta Maestra del Centro Histórico de Quito")
-st.markdown("Puedes seleccionar lugares de la lista o **tocar directamente el mapa**.")
-
-# Inicializar estados
+# ESTADOS DE SESIÓN
 if 'punto_a' not in st.session_state: st.session_state.punto_a = None
 if 'punto_b' not in st.session_state: st.session_state.punto_b = None
+
+st.title("📍 Guía Maestra: Centro Histórico de Quito")
 
 col1, col2 = st.columns([1, 3])
 
 with col1:
-    st.subheader("Opciones")
-    if st.button("🗑️ Limpiar Puntos"):
+    st.subheader("🔍 Buscador")
+    opciones = ["-- Tocar en Mapa --"] + sorted(LUGARES.keys())
+    
+    # Buscadores sincronizados
+    inicio = st.selectbox("Punto de Inicio:", opciones, key="busq_inicio")
+    destino = st.selectbox("Punto de Destino:", opciones, key="busq_destino")
+    
+    # Actualizar puntos si se usa el buscador
+    if inicio != "-- Tocar en Mapa --":
+        st.session_state.punto_a = LUGARES[inicio]
+    if destino != "-- Tocar en Mapa --":
+        st.session_state.punto_b = LUGARES[destino]
+
+    if st.button("🗑️ Reiniciar Mapa"):
         st.session_state.punto_a = None
         st.session_state.punto_b = None
         st.rerun()
-    
-    # Buscador de ayuda
-    seleccion_rapida = st.selectbox("Ver ubicación de:", ["-- Selecciona --"] + sorted(LUGARES_COMPLETOS.keys()))
-    if seleccion_rapida != "-- Selecciona --":
-        coords = LUGARES_COMPLETOS[seleccion_rapida]
-        st.info(f"📍 {seleccion_rapida} está en: {coords}")
 
-# Crear el Mapa
-m = folium.Map(location=[-0.2202, -78.5123], zoom_start=16)
+# CREAR MAPA BASE
+m = folium.Map(location=[-0.2215, -78.5120], zoom_start=16)
 
-# Dibujar todos los puntos de la lista como referencia
-for nom, coord in LUGARES_COMPLETOS.items():
-    folium.CircleMarker(
-        location=coord, radius=3, color="red", fill=True, popup=nom
+# Marcadores de todos los lugares (Puntos discretos para no saturar)
+for nom, coord in LUGARES.items():
+    folium.CircleMarker(coord, radius=3, color="#555", fill=True, popup=nom).add_to(m)
+
+# MARCADORES GRANDES (Estilo Google Maps)
+if st.session_state.punto_a:
+    folium.Marker(
+        st.session_state.punto_a, 
+        icon=folium.Icon(color="blue", icon="info-sign", icon_size=(45, 45)),
+        tooltip="Punto de Salida"
     ).add_to(m)
 
-# Dibujar Marcadores de selección
-if st.session_state.punto_a:
-    folium.Marker(st.session_state.punto_a, popup="INICIO", icon=folium.Icon(color="blue", icon="user", prefix="fa")).add_to(m)
 if st.session_state.punto_b:
-    folium.Marker(st.session_state.punto_b, popup="DESTINO", icon=folium.Icon(color="green", icon="flag", prefix="fa")).add_to(m)
+    folium.Marker(
+        st.session_state.punto_b, 
+        icon=folium.Icon(color="red", icon="flag", icon_size=(45, 45)),
+        tooltip="Destino"
+    ).add_to(m)
 
-# Calcular Ruta
+# CÁLCULO DE RUTA REAL
 if st.session_state.punto_a and st.session_state.punto_b:
     try:
         n1 = ox.nearest_nodes(G, st.session_state.punto_a[1], st.session_state.punto_a[0])
@@ -88,20 +100,21 @@ if st.session_state.punto_a and st.session_state.punto_b:
         path = nx.shortest_path(G, n1, n2, weight='length')
         dist = nx.shortest_path_length(G, n1, n2, weight='length')
         
-        # Dibujar la línea
+        # Línea de ruta azul Google
         puntos_ruta = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in path]
-        folium.PolyLine(puntos_ruta, color="blue", weight=6, opacity=0.7).add_to(m)
+        folium.PolyLine(puntos_ruta, color="#1a73e8", weight=7, opacity=0.85).add_to(m)
         
         with col1:
-            st.metric("Distancia", f"{dist/1000:.2f} km")
-            st.metric("Caminando", f"{int((dist/1000)/4*60)} min")
+            st.success(f"**Distancia:** {dist/1000:.2f} km")
+            st.info(f"**Tiempo:** {int((dist/1000)/4.5*60)} min")
     except:
-        st.error("Error al conectar los puntos.")
+        st.error("Error al trazar la ruta entre estos puntos.")
 
 with col2:
-    salida = st_folium(m, width="100%", height=650, key="mapa_final_quito")
+    # Renderizado del mapa interactivo
+    salida = st_folium(m, width="100%", height=750, key="quito_maps_final")
     
-    # Lógica de captura de clics
+    # Captura de clics si no se usó el buscador
     if salida.get("last_clicked"):
         clic = [salida["last_clicked"]['lat'], salida["last_clicked"]['lng']]
         if st.session_state.punto_a is None:
