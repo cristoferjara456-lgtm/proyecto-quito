@@ -1,99 +1,94 @@
 import streamlit as st
+import folium
+from streamlit_folium import st_folium
 import osmnx as ox
 import networkx as nx
-import matplotlib.pyplot as plt
 
-# --- 1. Configuración de la página de Streamlit ---
-st.set_page_config(page_title="Guía del Centro Histórico de Quito", layout="wide")
-st.title("🗺️ Navega por el Centro Histórico: Museos y Sitios")
-st.sidebar.header("Elige tu Ruta")
+# Configuración visual
+st.set_page_config(page_title="Ruta Museos Quito", layout="wide")
 
-# 2. Base de datos completa de tus Nodos (Museos y Sitios con coordenadas Lat/Lon)
-puntos_interes = {
-    "CAC (Atras Mejia)": (-0.2154, -78.5068),
-    "Colegio Mejia": (-0.2158, -78.5080),
-    "Basilica": (-0.2179, -78.5072),
-    "Plaza del Teatro": (-0.2195, -78.5077),
-    "Palacio de Carondelet": (-0.2199, -78.5121),
-    "Plaza Grande / Catedral": (-0.2201, -78.5111),
-    "Casa de Sucre": (-0.2215, -78.5089),
-    "La Compania": (-0.2215, -78.5122),
-    "San Francisco": (-0.2216, -78.5156),
-    "Casa del Alabado": (-0.2223, -78.5165),
-    "Museo de la Ciudad": (-0.2228, -78.5132),
-    "Carmen Alto": (-0.2232, -78.5125),
-    "Santo Domingo": (-0.2234, -78.5096),
-    "La Ronda": (-0.2239, -78.5118),
-    "El Panecillo": (-0.2289, -78.5186)
+st.title("🏛️ Guía Interactiva de Museos - Quito")
+st.markdown("Selecciona tu punto de partida, destino y cómo te moverás.")
+
+# 1. DATOS DE LOS MUSEOS (Puedes añadir más aquí)
+museos = {
+    "Museo de la Ciudad": [-0.2238, -78.5138],
+    "Museo Alberto Mena Caamaño": [-0.2205, -78.5118],
+    "Casa del Alabado": [-0.2215, -78.5152],
+    "Museo Nacional (MUNA)": [-0.2100, -78.4945],
+    "Centro de Arte Contemporáneo": [-0.2165, -78.5042]
 }
 
-# --- 3. Widgets de la Interfaz (Menús desplegables para origen y destino) ---
-# Se muestran en la barra lateral izquierda
-origen_nombre = st.sidebar.selectbox("Desde:", list(puntos_interes.keys()))
-destino_nombre = st.sidebar.selectbox("Hasta:", list(puntos_interes.keys()))
+# 2. BARRA LATERAL (CONFIGURACIÓN)
+with st.sidebar:
+    st.header("Opciones de Viaje")
+    transporte = st.selectbox(
+        "¿Cómo viajarás?",
+        ["Caminando", "Auto", "Bicicleta"]
+    )
+    
+    # Mapeo de transporte para la IA de rutas
+    modo_map = {"Caminando": "walk", "Auto": "drive", "Bicicleta": "bike"}
+    modo_ox = modo_map[transporte]
+    
+    st.info("El mapa mostrará la ruta más corta por las calles reales.")
 
-# Botón para activar el cálculo
-if st.sidebar.button("🚗 Buscar Ruta"):
-    if origen_nombre == destino_nombre:
-        st.warning("El origen y el destino no pueden ser el mismo. Por favor, elige diferentes.")
-    else:
-        # Mensaje de carga mientras se procesa
-        with st.spinner("Cargando mapa y calculando ruta... esto puede tardar unos segundos."):
-            # 4. Descargar el grafo del Centro Histórico (igual que en el mapa anterior)
-            # Usamos un punto central y una distancia para asegurar una cobertura amplia
-            centro_lat, centro_lon = -0.2201, -78.5121 # Plaza Grande
-            distancia = 1200 # Metros a la redonda
-            G = ox.graph_from_point((centro_lat, centro_lon), dist=distancia, network_type='walk')
+# 3. INTERFAZ DE SELECCIÓN
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    inicio = st.selectbox("Desde:", list(museos.keys()), index=0)
+    destino = st.selectbox("Hacia:", list(museos.keys()), index=1)
+    btn_ruta = st.button("🚀 Calcular Ruta y Tiempo")
+
+# 4. MAPA BASE (Siempre visible)
+# Centrado en el Centro Histórico de Quito
+m = folium.Map(location=[-0.2202, -78.5123], zoom_start=14, control_scale=True)
+
+# Dibujar marcadores de todos los museos
+for nombre, coords in museos.items():
+    folium.Marker(
+        coords, 
+        popup=nombre, 
+        tooltip=nombre,
+        icon=folium.Icon(color="red", icon="info-sign")
+    ).add_to(m)
+
+# 5. LÓGICA DE RUTA
+if btn_ruta:
+    with st.spinner("Calculando ruta óptima en Quito..."):
+        try:
+            # Obtener coordenadas
+            coord_orig = museos[inicio]
+            coord_dest = museos[destino]
+
+            # Descargar red de calles (solo el área necesaria para ahorrar memoria)
+            G = ox.graph_from_point(coord_orig, dist=3000, network_type=modo_ox)
             
-            # 5. Encontrar los nodos más cercanos en la red vial para origen y destino
-            # Las coordenadas de tus puntos son (Lat, Lon), pero ox.nearest_nodes espera (Lon, Lat)
-            orig_lon, orig_lat = puntos_interes[origen_nombre][1], puntos_interes[origen_nombre][0]
-            dest_lon, dest_lat = puntos_interes[destino_nombre][1], puntos_interes[destino_nombre][0]
+            # Encontrar nodos más cercanos en las calles
+            orig_node = ox.nearest_nodes(G, coord_orig[1], coord_orig[0])
+            dest_node = ox.nearest_nodes(G, coord_dest[1], coord_dest[0])
+            
+            # Algoritmo de Dijkstra para la ruta más corta
+            ruta = nx.shortest_path(G, orig_node, dest_node, weight='length')
+            distancia_metros = nx.shortest_path_length(G, orig_node, dest_node, weight='length')
+            
+            # Calcular tiempo (Distancia / Velocidad)
+            vel_kmh = {"Caminando": 4.5, "Auto": 30, "Bicicleta": 15}
+            tiempo_minutos = (distancia_metros / 1000) / vel_kmh[transporte] * 60
 
-            nodo_origen = ox.nearest_nodes(G, orig_lon, orig_lat)
-            nodo_destino = ox.nearest_nodes(G, dest_lon, dest_lat)
+            # Mostrar resultados
+            st.success(f"**Distancia:** {distancia_metros/1000:.2f} km")
+            st.warning(f"**Tiempo estimado:** {int(tiempo_minutos)} min aprox.")
 
-            # 6. Calcular la ruta más corta usando el Algoritmo de Dijkstra
-            # 'weight='length'' significa que busca la ruta con menor distancia física
-            try:
-                ruta_corta = nx.shortest_path(G, nodo_origen, nodo_destino, weight='length')
-                
-                # 7. Visualizar la ruta en el mapa
-                fig, ax = ox.plot_graph_route(
-                    G, ruta_corta, 
-                    route_color='cyan',    # La ruta se verá en cian
-                    route_linewidth=4, 
-                    node_size=0,           # No mostrar los nodos de las calles
-                    bgcolor='black',       # Fondo negro
-                    edge_color='#555555',  # Calles en gris oscuro para que la ruta resalte
-                    show=False, 
-                    close=False,
-                    figsize=(15, 15)
-                )
+            # Dibujar la línea de la ruta en el mapa
+            puntos_ruta = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in ruta]
+            folium.PolyLine(puntos_ruta, color="blue", weight=6, opacity=0.8).add_to(m)
+            m.fit_bounds(puntos_ruta) # Ajustar zoom a la ruta
+            
+        except Exception as e:
+            st.error("No se pudo conectar los puntos por calle. Intenta otro modo.")
 
-                # 8. Superponer tus puntos de interés (para que el usuario los vea todos)
-                for nombre, coords in puntos_interes.items():
-                    lat, lon = coords
-                    ax.scatter(lon, lat, c='#00ffff', s=60, zorder=5, edgecolor='white', linewidth=1)
-                    # Resaltar el origen y destino con un color diferente
-                    if nombre == origen_nombre:
-                        ax.text(lon + 0.0001, lat + 0.0001, f"📍 {nombre} (Origen)", color='lightgreen', fontsize=9, fontweight='bold', zorder=7)
-                    elif nombre == destino_nombre:
-                        ax.text(lon + 0.0001, lat + 0.0001, f"🏁 {nombre} (Destino)", color='red', fontsize=9, fontweight='bold', zorder=7)
-                    else:
-                        ax.text(lon + 0.0001, lat + 0.0001, nombre, color='#ffff00', fontsize=8, fontweight='bold', zorder=6)
-
-
-                st.write(f"### Ruta encontrada de: {origen_nombre} a {destino_nombre}")
-                st.pyplot(fig) # Muestra la imagen generada por Matplotlib en la app
-                st.success("¡Desplázate por el mapa de arriba para ver la ruta!")
-
-            except nx.NetworkXNoPath:
-                st.error("No se pudo encontrar una ruta entre los puntos seleccionados. Puede que estén en islas de red separadas.")
-            except Exception as e:
-                st.error(f"Ocurrió un error inesperado al calcular la ruta: {e}")
-else:
-    st.info("Selecciona un punto de inicio y un destino en la barra izquierda, luego haz clic en 'Buscar Ruta'.")
-
-st.markdown("---")
-st.markdown("Desarrollado con Python, OSMnx y Streamlit.")
+# 6. MOSTRAR MAPA FINAL
+with col2:
+    st_folium(m, width="100%", height=600)
